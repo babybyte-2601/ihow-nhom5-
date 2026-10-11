@@ -38,15 +38,17 @@ NGUYÊN TẮC BẮT BUỘC:
 - Chỉ khi người học đã qua các bước gợi ý và chủ động yêu cầu xem lời giải hoàn chỉnh, mới cung cấp code hoàn chỉnh kèm giải thích.
 
 5. ĐỘ DÀI VÀ VĂN PHONG:
-- Ngắn gọn (chỉ từ 2 - 4 câu mỗi lượt), dùng tiếng Việt gần gũi, rõ ràng, thân thiện.
+- Ngắn gọn (chỉ từ 2 - 4 câu mỗi lượt trao đổi gợi ý). Khi người học yêu cầu code hoàn chỉnh thì cung cấp đầy đủ code và giải thích rõ ràng.
 """
 
 
 MODELS_TO_TRY = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
     "gemini-3.5-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
 ]
 
 
@@ -84,7 +86,7 @@ LỊCH SỬ TRÒ CHUYỆN:
 Nhiệm vụ: Phản hồi lượt mới nhất của NGƯỜI HỌC theo phương pháp hỏi đáp tương tác gợi mở từng bước.
 Yêu cầu:
 - Tuyệt đối không chào hỏi xã giao, không khen khách sáo sáo rỗng.
-- Tập trung vào duy nhất bước hiện tại và kết thúc bằng đúng 1 câu hỏi gợi mở.
+- Tập trung vào duy nhất bước hiện tại và kết thúc bằng đúng 1 câu hỏi gợi mở (nếu người học cần code gấp hoàn chỉnh thì cung cấp code hoàn chỉnh).
 """
 
     last_error = None
@@ -98,12 +100,21 @@ Yêu cầu:
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
                         temperature=0.4,
-                        max_output_tokens=700
+                        max_output_tokens=2500
                     )
                 )
 
-                if response.text:
+                if response and response.text:
                     return response.text.strip()
+
+                if response and response.candidates:
+                    parts = []
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, "text") and part.text:
+                            parts.append(part.text)
+                    if parts:
+                        return "".join(parts).strip()
+
                 raise ValueError("AI không trả về nội dung.")
 
             except errors.ServerError as err:
@@ -256,15 +267,10 @@ if st.session_state.messages:
                     {
                         "role": "assistant",
                         "content": (
-                            "Mình chưa gọi được mô hình AI. "
-                            "Hãy kiểm tra kết nối, API key "
-                            "và hạn mức sử dụng."
+                            f"⚠️ Không thể kết nối tới mô hình AI ({type(error).__name__}): {error}\n\n"
+                            "Vui lòng thử lại hoặc kiểm tra kết nối / API key."
                         )
                     }
-                )
-
-                st.error(
-                    f"Lỗi: {type(error).__name__}: {error}"
                 )
 
             st.rerun()
