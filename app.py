@@ -42,14 +42,39 @@ NGUYÊN TẮC BẮT BUỘC:
 """
 
 
-MODELS_TO_TRY = [
+MODELS_NORMAL = [
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.7-flash",
     "gemini-3.8-flash",
     "gemini-3.5-flash",
-    "gemini-3.6-flash",
 ]
+
+MODELS_HIGH = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+]
+
+
+def is_advanced_context(topic, level, messages, force_high=False):
+    if force_high or level == "Đang tìm lỗi nâng cao":
+        return True
+
+    advanced_keywords = [
+        "nâng cao", "khó", "thuật toán", "quy hoạch động", "đồ thị", "cây nhị phân",
+        "con trỏ", "pointer", "oop", "class", "tối ưu", "độ phức tạp", "o(n", "o(log",
+        "leetcode", "codeforces", "segment tree", "trie", "backtracking", "đệ quy",
+        "recursion", "memory leak", "segmentation fault", "dijkstra", "bfs", "dfs",
+        "stack", "queue", "linked list", "danh sách liên kết"
+    ]
+
+    last_text = (messages[-1]["content"] if messages else "").lower()
+    topic_text = (topic or "").lower()
+
+    return any(kw in last_text or kw in topic_text for kw in advanced_keywords)
 
 
 def get_api_key():
@@ -59,8 +84,13 @@ def get_api_key():
         return ""
 
 
-def ask_mentor(api_key, topic, level, messages):
+def ask_mentor(api_key, topic, level, messages, force_high=False):
     client = genai.Client(api_key=api_key)
+
+    is_adv = is_advanced_context(topic, level, messages, force_high)
+    models_to_try = MODELS_HIGH if is_adv else MODELS_NORMAL
+    thinking_level = "HIGH" if is_adv else None
+    max_tokens = 3500 if is_adv else 2500
 
     history = []
 
@@ -91,17 +121,23 @@ Yêu cầu:
 
     last_error = None
 
-    for model_name in MODELS_TO_TRY:
+    for model_name in models_to_try:
         for attempt in range(2):
             try:
+                config_kwargs = {
+                    "system_instruction": SYSTEM_PROMPT,
+                    "temperature": 0.4,
+                    "max_output_tokens": max_tokens,
+                }
+                if thinking_level:
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(
+                        thinking_level=thinking_level
+                    )
+
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.4,
-                        max_output_tokens=2500
-                    )
+                    config=types.GenerateContentConfig(**config_kwargs)
                 )
 
                 if response and response.text:
@@ -122,6 +158,21 @@ Yêu cầu:
                 time.sleep(1.5)
             except Exception as err:
                 last_error = err
+                if thinking_level:
+                    try:
+                        fallback_response = client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.4,
+                                max_output_tokens=max_tokens
+                            )
+                        )
+                        if fallback_response and fallback_response.text:
+                            return fallback_response.text.strip()
+                    except Exception:
+                        pass
                 break
 
     raise last_error if last_error else RuntimeError("Không thể kết nối tới mô hình AI.")
@@ -156,6 +207,12 @@ level = st.selectbox(
     ]
 )
 
+use_high_model = st.checkbox(
+    "🧠 Ưu tiên Model High (tư duy sâu cho bài toán khó / nâng cao)",
+    value=(level == "Đang tìm lỗi nâng cao"),
+    help="Tự động ưu tiên Gemini 3.8 Flash ở mức độ tư duy cao (Thinking High) khi gặp thuật toán phức tạp hoặc bài toán khó."
+)
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -164,6 +221,9 @@ if "active_topic" not in st.session_state:
 
 if "active_level" not in st.session_state:
     st.session_state.active_level = level
+
+if "active_high_model" not in st.session_state:
+    st.session_state.active_high_model = use_high_model
 
 question = st.text_area(
     "Nhập bài toán hoặc đoạn code:",
@@ -190,6 +250,7 @@ if st.button("Bắt đầu học", type="primary"):
         else:
             st.session_state.active_topic = topic
             st.session_state.active_level = level
+            st.session_state.active_high_model = use_high_model
 
             st.session_state.messages = [
                 {
@@ -199,12 +260,21 @@ if st.button("Bắt đầu học", type="primary"):
             ]
 
             try:
-                with st.spinner("AI Mentor đang suy nghĩ..."):
+                is_high = is_advanced_context(
+                    topic,
+                    level,
+                    st.session_state.messages,
+                    st.session_state.active_high_model
+                )
+                spinner_text = "AI Mentor đang suy nghĩ chuyên sâu (Model High)..." if is_high else "AI Mentor đang suy nghĩ..."
+
+                with st.spinner(spinner_text):
                     reply = ask_mentor(
                         api_key,
                         topic,
                         level,
-                        st.session_state.messages
+                        st.session_state.messages,
+                        force_high=st.session_state.active_high_model
                     )
 
                 st.session_state.messages.append(
@@ -247,12 +317,21 @@ if st.session_state.messages:
             )
 
             try:
-                with st.spinner("AI Mentor đang suy nghĩ..."):
+                is_high = is_advanced_context(
+                    st.session_state.active_topic,
+                    st.session_state.active_level,
+                    st.session_state.messages,
+                    st.session_state.get("active_high_model", False)
+                )
+                spinner_text = "AI Mentor đang suy nghĩ chuyên sâu (Model High)..." if is_high else "AI Mentor đang suy nghĩ..."
+
+                with st.spinner(spinner_text):
                     reply = ask_mentor(
                         api_key,
                         st.session_state.active_topic,
                         st.session_state.active_level,
-                        st.session_state.messages
+                        st.session_state.messages,
+                        force_high=st.session_state.get("active_high_model", False)
                     )
 
                 st.session_state.messages.append(
