@@ -1,3 +1,20 @@
+# Streamlit secrets and private configuration
 .streamlit/secrets.toml
+.env
+*.env
+
+# Python caches and bytecode
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
 .venv/
+venv/
+ENV/
+
+# Testing and IDE caches
+.pytest_cache/
+.coverage
+.vscode/
+.idea/

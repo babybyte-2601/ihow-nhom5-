@@ -1,355 +1,395 @@
+"""
+iHOW - Nguyên bản trước — Công nghệ sau.
+Nền tảng hỗ trợ học lập trình và tư duy giải quyết vấn đề.
+"""
 
-import time
 import streamlit as st
-from google import genai
-from google.genai import types, errors
 
+import config
+import mentor
+import prompts
+from session import ROADMAP_STAGES, SessionManager
+
+# Cấu hình trang Streamlit
 st.set_page_config(
-    page_title="iHOW - HỖ TRỢ BẠN LÀM CHỦ VẤN ĐỀ",
-    page_icon="🎓",
-    layout="centered"
+    page_title="iHOW — Nguyên bản trước, Công nghệ sau",
+    page_icon="💡",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# Khởi tạo Session State
+session_mgr = SessionManager()
 
-SYSTEM_PROMPT = """
-Bạn là AI Mentor lập trình theo phương pháp Socratic (hỏi đáp tương tác gợi mở từng bước) dành cho người mới bắt đầu.
+# --- SIDEBAR: Cấu hình và Thông tin phiên học ---
+with st.sidebar:
+    st.markdown("## 💡 **iHOW**")
+    st.caption("**Nguyên bản trước — Công nghệ sau.**")
+    st.write(
+        "AI có thể sinh ra đáp án ngay lập tức. "
+        "iHOW giúp bạn hiểu rõ con đường dẫn tới đáp án để tự tin giải các bài tiếp theo."
+    )
+    st.divider()
 
-MỤC TIÊU:
-Dẫn dắt người học tự tư duy, từng bước hiểu bản chất vấn đề và tự tìm ra cách giải. Có thể đưa sẵn code đáp án hoàn chỉnh ngay từ đầu khi người dùng cần gấp, nhưng phải khiến người dùng cảm thấy có lỗi và có mong muốn học lại về bài toán đó.
+    st.subheader("⚙️ Thiết lập bài học")
 
-NGUYÊN TẮC BẮT BUỘC:
+    topic = st.selectbox(
+        "Chủ đề học tập",
+        [
+            "C++ - Cấu trúc điều kiện (if / else / switch)",
+            "C++ - Vòng lặp (for / while / do-while)",
+            "C++ - Mảng & Chuỗi ký tự",
+            "C++ - Hàm & Kỹ thuật đệ quy",
+            "C++ - Con trỏ & Cấp phát động",
+            "Python - Biến, Kiểu dữ liệu & Điều kiện",
+            "Python - Danh sách, Tuple & Dictionary",
+            "Python - Vòng lặp & Hàm",
+            "Cấu trúc dữ liệu & Thuật toán cơ bản",
+            "Tư duy giải quyết vấn đề"
+        ],
+        index=0
+    )
 
-1. TUYỆT ĐỐI KHÔNG CHÀO HỎI XÃ GIAO SÁO RỖNG:
-- Không dùng các câu như: "Chào bạn!", "Xin chào!", "Cảm ơn bạn đã chia sẻ...", "Đây là bài toán rất thú vị...", "Rất vui được đồng hành...".
-- Luôn đi thẳng trực tiếp vào nội dung trọng tâm.
+    level = st.selectbox(
+        "Trình độ hiện tại",
+        [
+            "Mới bắt đầu",
+            "Đã hiểu cơ bản",
+            "Đang tìm lỗi nâng cao"
+        ],
+        index=0
+    )
 
-2. HỎI ĐÁP TƯƠNG TÁC TỪNG BƯỚC (STEP-BY-STEP):
-- Chia nhỏ bài toán hoặc lỗi sai thành từng bước logic đơn giản.
-- Mỗi lượt trả lời chỉ tập trung vào DUY NHẤT 1 bước hiện tại.
-- Luôn kết thúc mỗi lượt bằng ĐÚNG MỘT câu hỏi gợi mở trọng tâm để người học tự suy nghĩ và trả lời.
+    use_high = st.checkbox(
+        "🧠 Ưu tiên Model High (Tư duy sâu)",
+        value=(level == "Đang tìm lỗi nâng cao"),
+        help="Tự động ưu tiên Gemini 3.8 Flash ở chế độ Thinking High cho các bài toán giải thuật phức tạp."
+    )
 
-3. XỬ LÝ KHI NGƯỜI HỌC GỬI BÀI TOÁN HOẶC CODE:
-- Nếu code có lỗi: Nêu hiện tượng hoặc vị trí đáng ngờ bằng ngôn ngữ dễ hiểu, KHÔNG sửa code ngay. Đặt câu hỏi giúp người học tự dự đoán luồng chạy để tìm ra lỗi.
-- Nếu giải bài toán mới: Gợi mở từ việc xác định yêu cầu, thuật toán từng bước trước khi viết code.
-
-4. BÁM SÁT LỊCH SỬ HỘI THOẠI:
-- Khi người học trả lời đúng: Xác nhận ngắn gọn (ví dụ: "Chính xác!", "Đúng rồi!"), rồi chuyển ngay sang câu hỏi của bước tiếp theo. Không hỏi lại điều họ đã trả lời đúng.
-- Khi người học trả lời sai: Chỉ ra điểm nhầm lẫn một cách dễ hiểu, nâng mức độ gợi ý và để họ thử lại.
-- Chỉ khi người học đã qua các bước gợi ý và chủ động yêu cầu xem lời giải hoàn chỉnh, mới cung cấp code hoàn chỉnh kèm giải thích.
-
-5. ĐỘ DÀI VÀ VĂN PHONG:
-- Ngắn gọn (chỉ từ 2 - 4 câu mỗi lượt trao đổi gợi ý). Khi người học yêu cầu code hoàn chỉnh thì cung cấp đầy đủ code và giải thích rõ ràng.
-"""
-
-
-MODELS_NORMAL = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-]
-
-MODELS_HIGH = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
-]
-
-
-def is_advanced_context(topic, level, messages, force_high=False):
-    if force_high or level == "Đang tìm lỗi nâng cao":
-        return True
-
-    advanced_keywords = [
-        "nâng cao", "khó", "thuật toán", "quy hoạch động", "đồ thị", "cây nhị phân",
-        "con trỏ", "pointer", "oop", "class", "tối ưu", "độ phức tạp", "o(n", "o(log",
-        "leetcode", "codeforces", "segment tree", "trie", "backtracking", "đệ quy",
-        "recursion", "memory leak", "segmentation fault", "dijkstra", "bfs", "dfs",
-        "stack", "queue", "linked list", "danh sách liên kết"
-    ]
-
-    last_text = (messages[-1]["content"] if messages else "").lower()
-    topic_text = (topic or "").lower()
-
-    return any(kw in last_text or kw in topic_text for kw in advanced_keywords)
-
-
-def get_api_key():
-    try:
-        return st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        return ""
-
-
-def ask_mentor(api_key, topic, level, messages, force_high=False):
-    client = genai.Client(api_key=api_key)
-
-    is_adv = is_advanced_context(topic, level, messages, force_high)
-    models_to_try = MODELS_HIGH if is_adv else MODELS_NORMAL
-    thinking_level = "HIGH" if is_adv else None
-    max_tokens = 3500 if is_adv else 2500
-
-    history = []
-
-    for message in messages:
-        if message["role"] == "user":
-            role = "NGƯỜI HỌC"
-        else:
-            role = "AI MENTOR"
-
-        history.append(
-            role + ":\n" + message["content"]
+    st.divider()
+    st.subheader("📊 Tự đánh giá mức độ tự tin (Tùy chọn)")
+    conf_col1, conf_col2 = st.columns(2)
+    with conf_col1:
+        st.caption("Trước khi giải:")
+        conf_before = st.select_slider(
+            "Trước",
+            options=[1, 2, 3, 4, 5],
+            value=session_mgr.get_summary()["confidence_before"] or 3,
+            label_visibility="collapsed",
+            key="slider_conf_before"
         )
+        session_mgr.set_confidence(conf_before, is_before=True)
 
-    conversation = "\n\n".join(history)
+    with conf_col2:
+        st.caption("Sau khi học:")
+        conf_after = st.select_slider(
+            "Sau",
+            options=[1, 2, 3, 4, 5],
+            value=session_mgr.get_summary()["confidence_after"] or 3,
+            label_visibility="collapsed",
+            key="slider_conf_after"
+        )
+        session_mgr.set_confidence(conf_after, is_before=False)
 
-    prompt = f"""
-Chủ đề học: {topic}
-Trình độ: {level}
+    st.divider()
+    if st.button("🔄 Bắt đầu phiên học mới", use_container_width=True):
+        session_mgr.reset_session()
+        st.rerun()
 
-LỊCH SỬ TRÒ CHUYỆN:
-{conversation}
-
-Nhiệm vụ: Phản hồi lượt mới nhất của NGƯỜI HỌC theo phương pháp hỏi đáp tương tác gợi mở từng bước.
-Yêu cầu:
-- Tuyệt đối không chào hỏi xã giao, không khen khách sáo sáo rỗng.
-- Tập trung vào duy nhất bước hiện tại và kết thúc bằng đúng 1 câu hỏi gợi mở (nếu người học cần code gấp hoàn chỉnh thì cung cấp code hoàn chỉnh).
-"""
-
-    last_error = None
-
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                config_kwargs = {
-                    "system_instruction": SYSTEM_PROMPT,
-                    "temperature": 0.4,
-                    "max_output_tokens": max_tokens,
-                }
-                if thinking_level:
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(
-                        thinking_level=thinking_level
-                    )
-
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(**config_kwargs)
-                )
-
-                if response and response.text:
-                    return response.text.strip()
-
-                if response and response.candidates:
-                    parts = []
-                    for part in response.candidates[0].content.parts:
-                        if hasattr(part, "text") and part.text:
-                            parts.append(part.text)
-                    if parts:
-                        return "".join(parts).strip()
-
-                raise ValueError("AI không trả về nội dung.")
-
-            except errors.ServerError as err:
-                last_error = err
-                time.sleep(1.5)
-            except Exception as err:
-                last_error = err
-                if thinking_level:
-                    try:
-                        fallback_response = client.models.generate_content(
-                            model=model_name,
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                system_instruction=SYSTEM_PROMPT,
-                                temperature=0.4,
-                                max_output_tokens=max_tokens
-                            )
-                        )
-                        if fallback_response and fallback_response.text:
-                            return fallback_response.text.strip()
-                    except Exception:
-                        pass
-                break
-
-    raise last_error if last_error else RuntimeError("Không thể kết nối tới mô hình AI.")
+    # Kiểm tra API Key an toàn
+    api_valid, api_msg = config.validate_api_configuration()
+    if not api_valid:
+        st.warning("⚠️ Chưa tìm thấy API Key cấu hình.")
+        with st.expander("Hướng dẫn thiết lập API Key"):
+            st.markdown(
+                "1. **Chạy cục bộ:** Mở file `.streamlit/secrets.toml` và điền:\n"
+                "```toml\nGEMINI_API_KEY = \"AIzaSy...\"\n```\n"
+                "2. **Streamlit Community Cloud:** Vào mục **App Settings > Secrets** và thêm `GEMINI_API_KEY`."
+            )
 
 
-st.title("🎓 iHOW - HỖ TRỢ BẠN LÀM CHỦ VẤN ĐỀ")
-
-st.write(
-    "Không chỉ đưa đáp án. Hãy cùng AI hiểu vấn đề "
-    "và tự tìm ra lời giải."
+# --- MAIN INTERFACE: HEADER & PRODUCT IDENTITY ---
+st.title("💡 iHOW")
+st.subheader("Nguyên bản trước — Công nghệ sau.")
+st.markdown(
+    "**Đừng chỉ hiểu lời giải. Hãy tự giải được bài tiếp theo.**  \n"
+    "*iHOW giúp bạn hiểu đề, tháo gỡ lỗi lập trình và xây dựng khả năng tự tư duy. "
+    "Bạn có thể học từng bước, cùng gỡ lỗi hoặc xem lời giải đầy đủ khi thực sự cần.*"
 )
 
 st.divider()
 
-topic = st.selectbox(
-    "Chủ đề học tập",
-    [
-        "C++ - Cấu trúc điều kiện",
-        "C++ - Vòng lặp",
-        "C++ - Mảng",
-        "Python - Cơ bản",
-        "Tư duy giải quyết vấn đề"
-    ]
-)
+# --- LỰA CHỌN CHẾ ĐỘ HỌC TẬP (3 MODES) ---
+st.markdown("### 1. Chọn nhu cầu học tập của bạn")
+mode_cols = st.columns(3)
 
-level = st.selectbox(
-    "Trình độ của bạn",
-    [
-        "Mới bắt đầu",
-        "Đã hiểu cơ bản",
-        "Đang tìm lỗi nâng cao"
-    ]
-)
+with mode_cols[0]:
+    is_mode_a = (session_mgr.mode == "mode_a")
+    if st.button(
+        "🌱 Mode A: Học để hiểu\n(Dẫn dắt từng bước)",
+        type="primary" if is_mode_a else "secondary",
+        use_container_width=True,
+        key="btn_mode_a"
+    ):
+        session_mgr.mode = "mode_a"
+        st.rerun()
+    st.caption("Gợi mở tư duy Socratic: Hiểu đề ➔ Lập kế hoạch ➔ Viết code ➔ Kiểm thử ➔ Đúc kết.")
 
-use_high_model = st.checkbox(
-    "🧠 Ưu tiên Model High (tư duy sâu cho bài toán khó / nâng cao)",
-    value=(level == "Đang tìm lỗi nâng cao"),
-    help="Tự động ưu tiên Gemini 3.8 Flash ở mức độ tư duy cao (Thinking High) khi gặp thuật toán phức tạp hoặc bài toán khó."
-)
+with mode_cols[1]:
+    is_mode_b = (session_mgr.mode == "mode_b")
+    if st.button(
+        "🛠️ Mode B: Gỡ lỗi cùng tôi\n(Tìm nguyên nhân & sửa lỗi)",
+        type="primary" if is_mode_b else "secondary",
+        use_container_width=True,
+        key="btn_mode_b"
+    ):
+        session_mgr.mode = "mode_b"
+        st.rerun()
+    st.caption("Chỉ ra vị trí nghi vấn, phân tích nguyên nhân gốc rễ và hướng dẫn sửa chữa.")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+with mode_cols[2]:
+    is_mode_c = (session_mgr.mode == "mode_c")
+    if st.button(
+        "⚡ Mode C: Tôi cần code hoàn chỉnh\n(Xem giải pháp & đối chiếu)",
+        type="primary" if is_mode_c else "secondary",
+        use_container_width=True,
+        key="btn_mode_c"
+    ):
+        session_mgr.mode = "mode_c"
+        st.rerun()
+    st.caption("Nhận code hoàn chỉnh có chú thích ngay lập tức, kèm test case và phân tích Big-O.")
 
-if "active_topic" not in st.session_state:
-    st.session_state.active_topic = topic
+st.markdown("---")
 
-if "active_level" not in st.session_state:
-    st.session_state.active_level = level
 
-if "active_high_model" not in st.session_state:
-    st.session_state.active_high_model = use_high_model
+# --- ROADMAP TIẾN TRÌNH (CHO MODE A) ---
+if session_mgr.mode == "mode_a":
+    st.markdown("### 2. Lộ trình tư duy bài toán")
+    roadmap_cols = st.columns(len(ROADMAP_STAGES))
+    for idx, (stage_key, stage_title, stage_desc) in enumerate(ROADMAP_STAGES):
+        is_current = (session_mgr.current_stage == stage_key)
+        with roadmap_cols[idx]:
+            if st.button(
+                f"{'📍 ' if is_current else ''}{stage_title}",
+                key=f"stage_btn_{stage_key}",
+                type="primary" if is_current else "secondary",
+                use_container_width=True,
+                help=stage_desc
+            ):
+                session_mgr.set_stage(stage_key)
+                st.rerun()
+    st.caption(f"👉 Bước hiện tại: **{next(s[1] for s in ROADMAP_STAGES if s[0] == session_mgr.current_stage)}** — *{next(s[2] for s in ROADMAP_STAGES if s[0] == session_mgr.current_stage)}*")
+    st.markdown("---")
 
-question = st.text_area(
-    "Nhập bài toán hoặc đoạn code:",
-    placeholder=(
-        "Ví dụ: Tại sao if (n = 0) "
-        "lại khiến chương trình chạy sai?"
+
+# --- INPUT BÀI TOÁN HOẶC CODE ---
+if not session_mgr.is_active:
+    st.markdown("### Nhập bài toán hoặc đoạn code bạn đang làm việc")
+    input_placeholder = (
+        "Ví dụ: Viết chương trình tìm số lớn nhất và nhỏ nhất giữa hai số nhập từ bàn phím.\n"
+        "Hoặc dán đoạn code bạn đang gặp lỗi tại đây..."
     )
-)
-
-if st.button("Bắt đầu học", type="primary"):
-    if not question.strip():
-        st.warning("Bạn hãy nhập bài toán trước nhé.")
-
-    else:
-        api_key = get_api_key()
-
-        if not api_key:
-            st.error(
-                "Chưa tìm thấy API key. "
-                "Hãy kiểm tra file "
-                ".streamlit/secrets.toml."
-            )
-
-        else:
-            st.session_state.active_topic = topic
-            st.session_state.active_level = level
-            st.session_state.active_high_model = use_high_model
-
-            st.session_state.messages = [
-                {
-                    "role": "user",
-                    "content": question.strip()
-                }
-            ]
-
-            try:
-                is_high = is_advanced_context(
-                    topic,
-                    level,
-                    st.session_state.messages,
-                    st.session_state.active_high_model
-                )
-                spinner_text = "AI Mentor đang suy nghĩ chuyên sâu (Model High)..." if is_high else "AI Mentor đang suy nghĩ..."
-
-                with st.spinner(spinner_text):
-                    reply = ask_mentor(
-                        api_key,
-                        topic,
-                        level,
-                        st.session_state.messages,
-                        force_high=st.session_state.active_high_model
-                    )
-
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply
-                    }
-                )
-
-            except Exception as error:
-                st.error(
-                    f"Chưa gọi được AI: {type(error).__name__}: "
-                    f"{error}"
-                )
-
-if st.session_state.messages:
-    st.divider()
-    st.subheader("Phiên học của bạn")
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    follow_up = st.chat_input(
-        "Trả lời câu hỏi của Mentor hoặc hỏi tiếp..."
+    problem_input = st.text_area(
+        "Nội dung bài toán / code cần trao đổi:",
+        placeholder=input_placeholder,
+        height=140
     )
 
-    if follow_up:
-        api_key = get_api_key()
+    col_btn_start, col_hint_text = st.columns([1, 3])
+    with col_btn_start:
+        start_pressed = st.button("🚀 Bắt đầu buổi học", type="primary", use_container_width=True)
 
-        if not api_key:
-            st.error("Hãy kiểm tra API key trước.")
-
+    if start_pressed:
+        if not problem_input.strip():
+            st.warning("Vui lòng nhập bài toán hoặc đoạn code để bắt đầu nhé.")
         else:
-            st.session_state.messages.append(
-                {
-                    "role": "user",
-                    "content": follow_up
-                }
-            )
-
-            try:
-                is_high = is_advanced_context(
-                    st.session_state.active_topic,
-                    st.session_state.active_level,
-                    st.session_state.messages,
-                    st.session_state.get("active_high_model", False)
+            api_key = config.get_gemini_api_key()
+            if not api_key:
+                st.error("Chưa tìm thấy GEMINI_API_KEY. Vui lòng kiểm tra lại cấu hình theo hướng dẫn ở thanh bên.")
+            else:
+                session_mgr.reset_session(
+                    problem=problem_input.strip(),
+                    mode=session_mgr.mode,
+                    topic=topic,
+                    level=level,
+                    use_high=use_high
                 )
-                spinner_text = "AI Mentor đang suy nghĩ chuyên sâu (Model High)..." if is_high else "AI Mentor đang suy nghĩ..."
+                session_mgr.add_message("user", problem_input.strip())
 
-                with st.spinner(spinner_text):
-                    reply = ask_mentor(
-                        api_key,
-                        st.session_state.active_topic,
-                        st.session_state.active_level,
-                        st.session_state.messages,
-                        force_high=st.session_state.get("active_high_model", False)
-                    )
+                is_high_mode = mentor.is_advanced_context(topic, level, session_mgr.messages, use_high)
+                spinner_msg = "iHOW đang suy nghĩ chuyên sâu (Model High)..." if is_high_mode else "iHOW đang phân tích bài toán..."
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply
-                    }
-                )
-
-            except Exception as error:
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": (
-                            f"⚠️ Không thể kết nối tới mô hình AI ({type(error).__name__}): {error}\n\n"
-                            "Vui lòng thử lại hoặc kiểm tra kết nối / API key."
+                try:
+                    with st.spinner(spinner_msg):
+                        ai_reply = mentor.generate_tutor_response(
+                            api_key=api_key,
+                            mode=session_mgr.mode,
+                            current_stage=session_mgr.current_stage,
+                            topic=topic,
+                            level=level,
+                            messages=session_mgr.messages,
+                            user_problem=problem_input.strip(),
+                            force_high=use_high
                         )
-                    }
-                )
+                    session_mgr.add_message("assistant", ai_reply)
+                    session_mgr.record_skill("Bắt đầu phân tích bài toán")
+                    st.rerun()
 
-            st.rerun()
+                except Exception as err:
+                    st.error(f"⚠️ {err}")
+
+
+# --- GIAO DIỆN PHIÊN HỌC ĐANG DIỄN RA ---
+if session_mgr.is_active:
+    st.markdown("### 💬 Không gian thảo luận cùng iHOW")
+
+    # Hiển thị bài toán ban đầu trong expander gọn gàng
+    with st.expander("📌 Đề bài / Code ban đầu của bạn", expanded=False):
+        st.write(session_mgr._state.get("user_problem", ""))
+
+    # Hiển thị lịch sử hội thoại
+    for msg in session_mgr.messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "user":
+            with st.chat_message("user", avatar="🧑‍💻"):
+                st.markdown(content)
+        else:
+            with st.chat_message("assistant", avatar="💡"):
+                st.markdown(content)
+
+    # --- THANG GỢI Ý CHỦ ĐỘNG (HINT LADDER) ---
+    st.markdown("#### 🪜 Thang gợi ý chủ động")
+    st.caption("Bạn hoàn toàn chủ động: có thể nhận gợi ý nhẹ, xem mã giả hoặc mở ngay code hoàn chỉnh bất cứ lúc nào.")
+
+    hint_cols = st.columns(5)
+    with hint_cols[0]:
+        btn_hint_light = st.button("💡 Gợi ý nhẹ", use_container_width=True, help="Khơi gợi khái niệm, hướng suy nghĩ ban đầu")
+    with hint_cols[1]:
+        btn_hint_specific = st.button("🔍 Gợi ý cụ thể", use_container_width=True, help="Chỉ rõ công thức hoặc điều kiện cụ thể")
+    with hint_cols[2]:
+        btn_hint_pseudo = st.button("📝 Xem mã giả", use_container_width=True, help="Dàn ý thuật toán từng bước bằng tiếng Việt")
+    with hint_cols[3]:
+        btn_hint_snippet = st.button("💻 Xem code mẫu", use_container_width=True, help="Đoạn code ngắn xử lý phần cốt lõi")
+    with hint_cols[4]:
+        btn_hint_full = st.button("🚀 Lời giải hoàn chỉnh", use_container_width=True, help="Toàn bộ code chạy được ngay kèm giải thích")
+
+    selected_hint = None
+    if btn_hint_light:
+        selected_hint = ("HINT_LIGHT", "💡 Gợi ý nhẹ")
+    elif btn_hint_specific:
+        selected_hint = ("HINT_SPECIFIC", "🔍 Gợi ý cụ thể")
+    elif btn_hint_pseudo:
+        selected_hint = ("HINT_PSEUDOCODE", "📝 Xem mã giả")
+    elif btn_hint_snippet:
+        selected_hint = ("HINT_SNIPPET", "💻 Xem code mẫu")
+    elif btn_hint_full:
+        selected_hint = ("HINT_FULL_SOLUTION", "🚀 Lời giải hoàn chỉnh")
+
+    if selected_hint:
+        hint_code, hint_label = selected_hint
+        api_key = config.get_gemini_api_key()
+        if not api_key:
+            st.error("Chưa tìm thấy GEMINI_API_KEY.")
+        else:
+            session_mgr.record_hint(hint_code)
+            session_mgr.add_message("user", f"[Yêu cầu trợ giúp]: {hint_label}")
+            try:
+                with st.spinner(f"iHOW đang chuẩn bị {hint_label}..."):
+                    hint_reply = mentor.generate_hint(
+                        api_key=api_key,
+                        hint_level=hint_code,
+                        topic=topic,
+                        user_problem=session_mgr._state.get("user_problem", ""),
+                        messages=session_mgr.messages,
+                        force_high=use_high
+                    )
+                session_mgr.add_message("assistant", hint_reply)
+                session_mgr.record_skill(f"Sử dụng công cụ trợ giúp: {hint_label}")
+                st.rerun()
+            except Exception as err:
+                st.error(f"⚠️ {err}")
+
+    st.markdown("---")
+
+    # --- KHUNG NHẬP PHẢN HỒI (CHAT INPUT) ---
+    user_reply = st.chat_input("Nhập câu trả lời, dự đoán hoặc đặt câu hỏi tiếp theo...")
+    if user_reply:
+        api_key = config.get_gemini_api_key()
+        if not api_key:
+            st.error("Chưa tìm thấy GEMINI_API_KEY.")
+        else:
+            session_mgr.add_message("user", user_reply.strip())
+
+            is_high_mode = mentor.is_advanced_context(topic, level, session_mgr.messages, use_high)
+            spinner_msg = "iHOW đang suy nghĩ chuyên sâu (Model High)..." if is_high_mode else "iHOW đang phản hồi..."
+
+            try:
+                with st.spinner(spinner_msg):
+                    ai_reply = mentor.generate_tutor_response(
+                        api_key=api_key,
+                        mode=session_mgr.mode,
+                        current_stage=session_mgr.current_stage,
+                        topic=topic,
+                        level=level,
+                        messages=session_mgr.messages,
+                        user_problem=session_mgr._state.get("user_problem", ""),
+                        force_high=use_high
+                    )
+                session_mgr.add_message("assistant", ai_reply)
+                session_mgr.record_skill("Tham gia tương tác phân tích bài toán")
+                st.rerun()
+
+            except Exception as err:
+                session_mgr.add_message(
+                    "assistant",
+                    f"⚠️ iHOW tạm thời chưa kết nối được mô hình AI: {err}\n\n"
+                    "Vui lòng thử gửi lại tin nhắn sau vài giây."
+                )
+                st.rerun()
+
+    # --- TIỆN ÍCH MỞ RỘNG: BÀI TOÁN TƯƠNG TỰ & TỔNG KẾT PHIÊN HỌC ---
+    st.markdown("#### 🎯 Bước tiếp theo để làm chủ kiến thức")
+    ext_col1, ext_col2 = st.columns(2)
+
+    with ext_col1:
+        if st.button("🔄 Thử sức với bài toán tương tự (Transfer Challenge)", use_container_width=True):
+            api_key = config.get_gemini_api_key()
+            if not api_key:
+                st.error("Chưa tìm thấy GEMINI_API_KEY.")
+            else:
+                try:
+                    with st.spinner("iHOW đang tạo bài toán chuyển giao tương tự..."):
+                        challenge = mentor.generate_transfer_challenge(
+                            api_key=api_key,
+                            topic=topic,
+                            user_problem=session_mgr._state.get("user_problem", "")
+                        )
+                    session_mgr.add_message("assistant", f"### 🎯 Bài toán tương tự để thử sức:\n\n{challenge}")
+                    session_mgr.record_skill("Thử sức với bài toán tương tự (Transfer Learning)")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"⚠️ {err}")
+
+    with ext_col2:
+        with st.popover("📊 Xem tổng kết phiên học", use_container_width=True):
+            summary = session_mgr.get_summary()
+            st.markdown("### 📊 Tổng kết phiên học thực tế")
+            st.caption("Dữ liệu được ghi nhận trung thực dựa trên tương tác thực tế của bạn.")
+
+            st.write(f"- **Chế độ:** {summary['mode']}")
+            st.write(f"- **Chủ đề:** {summary['topic']}")
+            st.write(f"- **Giai đoạn đạt được:** {summary['stage_reached']}")
+            st.write(f"- **Số lượt trao đổi:** {summary['user_interactions_count']} lượt")
+            st.write(f"- **Gợi ý đã sử dụng:** {summary['hints_used_count']} lần")
+            st.write(f"- **Đã xem lời giải hoàn chỉnh:** {'Có' if summary['full_solution_viewed'] else 'Chưa'}")
+
+            st.markdown("##### 🏆 Kỹ năng đã thể hiện:")
+            if summary["demonstrated_skills"]:
+                for sk in summary["demonstrated_skills"]:
+                    st.markdown(f"- ✅ {sk}")
+            else:
+                st.write("- Đang trong quá trình tương tác bước đầu.")
+
+            if summary["confidence_before"] and summary["confidence_after"]:
+                st.markdown(f"- **Mức độ tự tin tự đánh giá:** Từ **{summary['confidence_before']}/5** ➔ **{summary['confidence_after']}/5**")
